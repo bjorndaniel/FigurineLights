@@ -4,7 +4,11 @@
 #include <FastLED.h>
 #include <ArduinoJson.h>
 
-#define LED_PIN 18
+#ifdef ESP8266_BUILD
+#define LED_PIN 2  // GPIO2 on ESP8266 (NodeMCU D4)
+#else
+#define LED_PIN 18  // GPIO18 on ESP32
+#endif
 #define NUM_LEDS 4
 #define NUM_GROUPS 4
 #define LEDS_PER_GROUP 1
