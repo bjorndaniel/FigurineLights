@@ -207,7 +207,7 @@ void handleRoot()
     html += "<div>";
     html += "<button class='btn btn-success' onclick='allOn()'>All On</button>";
     html += "<button class='btn btn-danger' onclick='allOff()'>All Off</button>";
-    html += "<button class='btn btn-warning' onclick='resetWifi()' style='margin-left: 20px; font-weight: bold;'>⚠️ Reset WiFi</button>";
+    html += "<button class='btn btn-warning' onclick='resetWifi()' style='margin-left: 20px; font-weight: bold;'>&#9888; Reset WiFi</button>";
     html += "</div>";
     html += "<div class='groups' id='groups'></div>";
     html += "</div>";
@@ -245,7 +245,7 @@ void handleRoot()
     html += "function allOn(){fetch('/api/all/on',{method:'POST'}).then(()=>setTimeout(loadStatus,100));}";
     html += "function allOff(){fetch('/api/all/off',{method:'POST'}).then(()=>setTimeout(loadStatus,100));}";
     html += "function resetWifi(){";
-    html += "if(confirm('⚠️ WARNING: Reset WiFi Settings?\\n\\nThis will:\\n• Clear saved WiFi credentials\\n• Restart the device\\n• Return to setup mode\\n\\nAre you sure?')){";
+    html += "if(confirm('WARNING: Reset WiFi Settings?\\n\\nThis will:\\n- Clear saved WiFi credentials\\n- Restart the device\\n- Return to setup mode\\n\\nAre you sure?')){";
     html += "if(confirm('FINAL CONFIRMATION:\\n\\nThis action cannot be undone!\\n\\nClick OK to proceed with WiFi reset.')){";
     html += "fetch('/api/reset',{method:'POST'}).then(()=>{alert('WiFi reset initiated! Device restarting in 3 seconds...');});";
     html += "}else{alert('WiFi reset cancelled.');}";
