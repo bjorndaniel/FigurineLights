@@ -5,12 +5,14 @@
 #include <Preferences.h>
 #include <esp_log.h>
 #include "LedController.h"
+#include "MqttClient.h"
 
 // Global objects
 LedController ledController;
 WebServer server(80);
 DNSServer dnsServer;
 Preferences preferences;
+MqttClient *mqttClient = nullptr;
 
 // Configuration
 #define RESET_BUTTON_PIN 0
@@ -188,11 +190,29 @@ void setup()
     savedSSID = preferences.getString("ssid", "");
     savedPassword = preferences.getString("password", "");
 
+    // Initialize MQTT client (reads broker from preferences key 'mqtt_broker')
+    const char *broker = preferences.getString("mqtt_broker", "");
+    if (broker == String(""))
+    {
+        broker = ""; // no broker configured
+    }
+    mqttClient = new MqttClient(ledController, preferences);
+    if (strlen(broker) > 0)
+    {
+        mqttClient->begin(broker, 1883);
+    }
+
     // Initialize WiFi
     setupWiFi();
 
     // Setup web server
     setupWebServer();
+    // If mqttClient was created and not begun with host earlier, attempt default to localhost
+    if (mqttClient && strlen(preferences.getString("mqtt_broker", "").c_str()) == 0)
+    {
+        // try local broker
+        mqttClient->begin("192.168.1.2", 1883);
+    }
     // Register brightness endpoint (handler is defined above)
     server.on("/api/all/brightness", HTTP_POST, handleAllBrightness);
 
@@ -211,6 +231,7 @@ void loop()
     }
 
     server.handleClient();
+    if (mqttClient) mqttClient->loop();
     delay(10);
 }
 
