@@ -118,6 +118,34 @@ void loadSettings()
     Serial.println("Settings loaded and applied");
 }
 
+// Handle setting brightness for all groups
+void handleAllBrightness()
+{
+    String body = server.arg("plain");
+    // Expect JSON: {"brightness":NN}
+    int idx = body.indexOf("\"brightness\":");
+    if (idx == -1)
+    {
+        server.send(400, "text/plain", "Missing brightness");
+        return;
+    }
+    int start = idx + 13;
+    int end = body.indexOf(',', start);
+    if (end == -1) end = body.indexOf('}', start);
+    int brightness = body.substring(start, end).toInt();
+    if (brightness < 1) brightness = 1;
+    if (brightness > 100) brightness = 100;
+
+    for (int i = 0; i < NUM_GROUPS; i++)
+    {
+        ledController.setGroupBrightness(i, (uint8_t)brightness);
+    }
+
+    server.send(200, "text/plain", "Brightness set");
+    addStatusEntry(String("All brightness set to ") + String(brightness));
+    saveSettings();
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -165,6 +193,8 @@ void setup()
 
     // Setup web server
     setupWebServer();
+    // Register brightness endpoint (handler is defined above)
+    server.on("/api/all/brightness", HTTP_POST, handleAllBrightness);
 
     Serial.println("Setup complete!");
 }
@@ -237,7 +267,6 @@ void setupWebServer()
     server.on("/api/group", HTTP_POST, handleGroup);
     server.on("/api/all/on", HTTP_POST, handleAllOn);
     server.on("/api/all/off", HTTP_POST, handleAllOff);
-    server.on("/api/all/brightness", HTTP_POST, handleAllBrightness);
     server.on("/api/reset", HTTP_POST, handleReset);
     server.begin();
     Serial.println("Web server started");
@@ -280,11 +309,13 @@ void handleRoot()
     html += "<button class='btn btn-success' onclick='allOn()'>All On</button>";
     html += "<button class='btn btn-danger' onclick='allOff()'>All Off</button>";
     html += "<button class='btn btn-warning' onclick='resetWifi()' style='margin-left: 20px; font-weight: bold;'>&#9888; Reset WiFi</button>";
-    // Global brightness slider for all groups
-    html += "<div style='display:inline-block;margin-left:20px;vertical-align:middle;'>";
-    html += "<label for='allBrightness' style='display:block;font-size:12px;margin-bottom:4px;'>All Brightness: <span id=\'allBrightnessLabel\'>100</span>%</label>";
-    html += "<input id='allBrightness' type='range' min='1' max='100' value='100' oninput='updateAllBrightnessLabel(this.value)' onchange='setAllBrightness(this.value)' style='vertical-align:middle;'>";
     html += "</div>";
+    // Global brightness row
+    html += "<div style='margin-top:12px;display:flex;align-items:center;gap:12px;'>";
+    html += "<label style='min-width:140px;font-size:14px;color:#ccc;'>Global Brightness</label>";
+    html += "<input id='allBrightness' type='range' min='1' max='100' value='100' oninput='updateAllBrightnessLabel(this.value)' style='flex:1;'>";
+    html += "<span id='allBrightnessLabel' style='min-width:50px;text-align:right;color:#ccc;'>100%</span>";
+    html += "<button class='btn btn-warning' onclick='resetBrightness()' style='margin-left:10px;'>Reset Brightness</button>";
     html += "</div>";
     html += "<div class='groups' id='groups'></div>";
     html += "</div>";
@@ -292,7 +323,8 @@ void handleRoot()
     // JavaScript
     html += "<script>";
     html += "let status={};";
-    html += "function init(){createGroups();loadStatus();setInterval(loadStatus,3000);}";
+    html += "let allBrightnessDebounce=null;";
+    html += "function init(){createGroups();loadStatus();setInterval(loadStatus,3000);document.getElementById('allBrightness').addEventListener('input',function(e){updateAllBrightnessLabel(e.target.value);if(allBrightnessDebounce)clearTimeout(allBrightnessDebounce);allBrightnessDebounce=setTimeout(()=>setAllBrightness(e.target.value),300);});}";
     html += "function createGroups(){";
     html += "const container=document.getElementById('groups');";
     html += "for(let i=0;i<4;i++){";
@@ -314,9 +346,13 @@ void handleRoot()
     html += "colorInput.value=hex;";
     html += "brightnessInput.value=group.brightness;brightVal.textContent=Math.round(group.brightness/255*100)+'%';";
     html += "statusText.textContent=group.isOn?'ON (R'+group.color.r+',G'+group.color.g+',B'+group.color.b+',Br'+group.brightness+')':'OFF';});";
+    // Initialize global slider from average brightness
+    html += "let avg=0;data.groups.forEach(g=>avg+=g.brightness);avg=Math.round((avg/data.groups.length)/255*100);document.getElementById('allBrightness').value=avg;document.getElementById('allBrightnessLabel').textContent=avg+'%';";
+    html += "}";
     html += "}";
     html += "function toggleGroup(i){const isOn=status.groups[i].isOn;sendCommand({group:i,isOn:!isOn});}";
     html += "function updateColor(i){const hex=document.getElementById('color'+i).value;const r=parseInt(hex.slice(1,3),16);const g=parseInt(hex.slice(3,5),16);const b=parseInt(hex.slice(5,7),16);sendCommand({group:i,color:{r:r,g:g,b:b}});}";
+    html += "function resetBrightness(){document.getElementById('allBrightness').value=100;document.getElementById('allBrightnessLabel').textContent='100%';setAllBrightness(100);}";
     html += "function updateBrightnessDisplay(i){const val=parseInt(document.getElementById('brightness'+i).value);const percent=Math.round(val/255*100);document.getElementById('brightVal'+i).textContent=percent+'%';}";
     html += "function updateBrightness(i){const val=parseInt(document.getElementById('brightness'+i).value);const percent=Math.round(val/255*100);document.getElementById('brightVal'+i).textContent=percent+'%';sendCommand({group:i,brightness:val});}";
     html += "function allOn(){fetch('/api/all/on',{method:'POST'}).then(()=>setTimeout(loadStatus,100));}";
@@ -475,33 +511,6 @@ void handleAllOn()
     ledController.setAllOn();
     addStatusEntry("All groups turned ON");
     server.send(200, "text/plain", "OK");
-    saveSettings();
-}
-
-void handleAllBrightness()
-{
-    String body = server.arg("plain");
-    // Expect JSON: {"brightness":NN}
-    int idx = body.indexOf("\"brightness\":");
-    if (idx == -1)
-    {
-        server.send(400, "text/plain", "Missing brightness");
-        return;
-    }
-    int start = idx + 13;
-    int end = body.indexOf(',', start);
-    if (end == -1) end = body.indexOf('}', start);
-    int brightness = body.substring(start, end).toInt();
-    if (brightness < 1) brightness = 1;
-    if (brightness > 100) brightness = 100;
-
-    for (int i = 0; i < NUM_GROUPS; i++)
-    {
-        ledController.setGroupBrightness(i, (uint8_t)brightness);
-    }
-
-    server.send(200, "text/plain", "Brightness set");
-    addStatusEntry(String("All brightness set to ") + String(brightness));
     saveSettings();
 }
 
