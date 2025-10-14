@@ -6,6 +6,7 @@
 #include <esp_log.h>
 #include "LedController.h"
 #include "MqttClient.h"
+#include <ArduinoJson.h>
 
 // Global objects
 LedController ledController;
@@ -51,6 +52,8 @@ void handleAllOff();
 void handleAllBrightness();
 void handleInfo();
 void handleReset();
+void handleSettings();
+void handleSaveSettings();
 void addStatusEntry(const String &action);
 
 // Persistence helpers
@@ -289,6 +292,8 @@ void setupWebServer()
     server.on("/api/all/on", HTTP_POST, handleAllOn);
     server.on("/api/all/off", HTTP_POST, handleAllOff);
     server.on("/api/reset", HTTP_POST, handleReset);
+    server.on("/settings", handleSettings);
+    server.on("/api/settings", HTTP_POST, handleSaveSettings);
     server.begin();
     Serial.println("Web server started");
 }
@@ -552,6 +557,58 @@ void handleReset()
     addStatusEntry("WiFi settings reset - restarting");
     server.send(200, "text/plain", "WiFi reset - device restarting");
     delay(1000);
+    ESP.restart();
+}
+
+void handleSettings()
+{
+    String html = "<!DOCTYPE html><html><head><title>Settings</title>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<style>body{font-family:Arial;padding:20px;background:#1a1a1a;color:white} .container{max-width:600px;margin:0 auto} label{display:block;margin-top:10px} input{width:100%;padding:8px;margin-top:6px;border-radius:4px;border:1px solid #444;background:#222;color:#fff} .btn{margin-top:12px;padding:10px 16px;border-radius:6px;border:none;background:#2196F3;color:white}</style></head><body>";
+    html += "<div class='container'><h1>Settings</h1>";
+    String broker = preferences.getString("mqtt_broker", "");
+    String user = preferences.getString("mqtt_user", "");
+    // Do not expose password in plain text
+    html += "<form id='settingsForm'>";
+    html += "<label>MQTT Broker (host or IP)</label><input id='broker' name='broker' value='" + broker + "'>";
+    html += "<label>MQTT Username (optional)</label><input id='user' name='user' value='" + user + "'>";
+    html += "<label>MQTT Password (optional)</label><input id='pass' name='pass' type='password' value=''>";
+    html += "<button class='btn' type='button' onclick='saveSettings()'>Save</button>";
+    html += "</form>";
+    html += "<p><a href='/'>Back to main UI</a></p>";
+    html += "</div>";
+    html += "<script>function saveSettings(){const b=document.getElementById('broker').value;const u=document.getElementById('user').value;const p=document.getElementById('pass').value;fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({broker:b,user:u,pass:p})}).then(r=>{if(r.ok){alert('Saved. Rebooting...');}else{alert('Save failed');}});}</script></body></html>";
+    server.send(200, "text/html", html);
+}
+
+void handleSaveSettings()
+{
+    String body = server.arg("plain");
+    StaticJsonDocument<256> doc;
+    DeserializationError err = deserializeJson(doc, body);
+    if (err)
+    {
+        server.send(400, "text/plain", "Invalid JSON");
+        return;
+    }
+    const char *broker = doc["broker"] | "";
+    const char *user = doc["user"] | "";
+    const char *pass = doc["pass"] | "";
+    if (strlen(broker) > 0)
+    {
+        preferences.putString("mqtt_broker", String(broker));
+    }
+    if (strlen(user) > 0)
+    {
+        preferences.putString("mqtt_user", String(user));
+    }
+    if (strlen(pass) > 0)
+    {
+        preferences.putString("mqtt_pass", String(pass));
+    }
+    // trigger restart to pick up new settings
+    server.send(200, "text/plain", "OK");
+    delay(500);
     ESP.restart();
 }
 
