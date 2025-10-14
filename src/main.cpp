@@ -46,9 +46,77 @@ void handleStatus();
 void handleGroup();
 void handleAllOn();
 void handleAllOff();
+void handleAllBrightness();
 void handleInfo();
 void handleReset();
 void addStatusEntry(const String &action);
+
+// Persistence helpers
+void saveSettings();
+void loadSettings();
+
+// Save current groups and global settings to Preferences as JSON
+void saveSettings()
+{
+    StaticJsonDocument<512> doc;
+    JsonArray groupsArr = doc.createNestedArray("groups");
+    for (int i = 0; i < NUM_GROUPS; i++)
+    {
+        LedGroup g = ledController.getGroup(i);
+        JsonObject obj = groupsArr.createNestedObject();
+        obj["r"] = g.color.r;
+        obj["g"] = g.color.g;
+        obj["b"] = g.color.b;
+        obj["brightness"] = g.brightness;
+        obj["on"] = g.isOn;
+    }
+
+    // Optionally save global values
+    // doc["globalBrightness"] = ???;
+
+    String out;
+    serializeJson(doc, out);
+    preferences.putString("settings", out);
+    Serial.println("Settings saved");
+}
+
+// Load settings from Preferences and apply to LED controller
+void loadSettings()
+{
+    String s = preferences.getString("settings", "");
+    if (s.length() == 0)
+    {
+        Serial.println("No saved settings found");
+        return;
+    }
+
+    StaticJsonDocument<512> doc;
+    DeserializationError err = deserializeJson(doc, s);
+    if (err)
+    {
+        Serial.println("Failed to parse settings JSON");
+        return;
+    }
+
+    JsonArray groupsArr = doc["groups"].as<JsonArray>();
+    int i = 0;
+    for (JsonObject obj : groupsArr)
+    {
+        if (i >= NUM_GROUPS) break;
+        int r = obj["r"] | 0;
+        int g = obj["g"] | 0;
+        int b = obj["b"] | 0;
+        int brightness = obj["brightness"] | 100;
+        bool on = obj["on"] | false;
+
+        ledController.setGroupColor(i, r, g, b);
+        ledController.setGroupBrightness(i, brightness);
+        ledController.setGroupState(i, on);
+        i++;
+    }
+
+    Serial.println("Settings loaded and applied");
+}
 
 void setup()
 {
@@ -63,6 +131,9 @@ void setup()
 
     // Initialize LED controller
     ledController.init();
+
+    // Load persisted settings (if any)
+    loadSettings();
 
     Serial.println("Testing LEDs...");
     Serial.printf("LED PIN: %d, NUM_LEDS: %d\n", LED_PIN, 4);
@@ -166,6 +237,7 @@ void setupWebServer()
     server.on("/api/group", HTTP_POST, handleGroup);
     server.on("/api/all/on", HTTP_POST, handleAllOn);
     server.on("/api/all/off", HTTP_POST, handleAllOff);
+    server.on("/api/all/brightness", HTTP_POST, handleAllBrightness);
     server.on("/api/reset", HTTP_POST, handleReset);
     server.begin();
     Serial.println("Web server started");
@@ -208,6 +280,11 @@ void handleRoot()
     html += "<button class='btn btn-success' onclick='allOn()'>All On</button>";
     html += "<button class='btn btn-danger' onclick='allOff()'>All Off</button>";
     html += "<button class='btn btn-warning' onclick='resetWifi()' style='margin-left: 20px; font-weight: bold;'>&#9888; Reset WiFi</button>";
+    // Global brightness slider for all groups
+    html += "<div style='display:inline-block;margin-left:20px;vertical-align:middle;'>";
+    html += "<label for='allBrightness' style='display:block;font-size:12px;margin-bottom:4px;'>All Brightness: <span id=\'allBrightnessLabel\'>100</span>%</label>";
+    html += "<input id='allBrightness' type='range' min='1' max='100' value='100' oninput='updateAllBrightnessLabel(this.value)' onchange='setAllBrightness(this.value)' style='vertical-align:middle;'>";
+    html += "</div>";
     html += "</div>";
     html += "<div class='groups' id='groups'></div>";
     html += "</div>";
@@ -244,6 +321,8 @@ void handleRoot()
     html += "function updateBrightness(i){const val=parseInt(document.getElementById('brightness'+i).value);const percent=Math.round(val/255*100);document.getElementById('brightVal'+i).textContent=percent+'%';sendCommand({group:i,brightness:val});}";
     html += "function allOn(){fetch('/api/all/on',{method:'POST'}).then(()=>setTimeout(loadStatus,100));}";
     html += "function allOff(){fetch('/api/all/off',{method:'POST'}).then(()=>setTimeout(loadStatus,100));}";
+    html += "function updateAllBrightnessLabel(v){document.getElementById('allBrightnessLabel').innerText=v;}";
+    html += "function setAllBrightness(v){fetch('/api/all/brightness',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({brightness:parseInt(v)})}).then(()=>setTimeout(loadStatus,200));}";
     html += "function resetWifi(){";
     html += "if(confirm('WARNING: Reset WiFi Settings?\\n\\nThis will:\\n- Clear saved WiFi credentials\\n- Restart the device\\n- Return to setup mode\\n\\nAre you sure?')){";
     html += "if(confirm('FINAL CONFIRMATION:\\n\\nThis action cannot be undone!\\n\\nClick OK to proceed with WiFi reset.')){";
@@ -345,6 +424,7 @@ void handleGroup()
         isOn = (isOnStr == "true");
         ledController.setGroupState(group, isOn);
         addStatusEntry("Group " + String(group + 1) + (isOn ? " turned ON" : " turned OFF"));
+        saveSettings();
     }
 
     int brightPos = body.indexOf("\"brightness\":");
@@ -357,6 +437,7 @@ void handleGroup()
         brightness = body.substring(colonPos + 1, endPos).toInt();
         ledController.setGroupBrightness(group, brightness);
         addStatusEntry("Group " + String(group + 1) + " brightness: " + String((brightness * 100) / 255) + "%");
+        saveSettings();
     }
 
     int colorPos = body.indexOf("\"color\":{");
@@ -367,11 +448,17 @@ void handleGroup()
         int bPos = body.indexOf("\"b\":", colorPos);
 
         if (rPos != -1)
+        {
             r = body.substring(rPos + 4, body.indexOf(',', rPos)).toInt();
+        }
         if (gPos != -1)
+        {
             g = body.substring(gPos + 4, body.indexOf(',', gPos)).toInt();
+        }
         if (bPos != -1)
+        {
             b = body.substring(bPos + 4, body.indexOf('}', bPos)).toInt();
+        }
 
         if (r >= 0 && g >= 0 && b >= 0)
         {
@@ -388,6 +475,34 @@ void handleAllOn()
     ledController.setAllOn();
     addStatusEntry("All groups turned ON");
     server.send(200, "text/plain", "OK");
+    saveSettings();
+}
+
+void handleAllBrightness()
+{
+    String body = server.arg("plain");
+    // Expect JSON: {"brightness":NN}
+    int idx = body.indexOf("\"brightness\":");
+    if (idx == -1)
+    {
+        server.send(400, "text/plain", "Missing brightness");
+        return;
+    }
+    int start = idx + 13;
+    int end = body.indexOf(',', start);
+    if (end == -1) end = body.indexOf('}', start);
+    int brightness = body.substring(start, end).toInt();
+    if (brightness < 1) brightness = 1;
+    if (brightness > 100) brightness = 100;
+
+    for (int i = 0; i < NUM_GROUPS; i++)
+    {
+        ledController.setGroupBrightness(i, (uint8_t)brightness);
+    }
+
+    server.send(200, "text/plain", "Brightness set");
+    addStatusEntry(String("All brightness set to ") + String(brightness));
+    saveSettings();
 }
 
 void handleAllOff()
@@ -395,12 +510,15 @@ void handleAllOff()
     ledController.setAllOff();
     addStatusEntry("All groups turned OFF");
     server.send(200, "text/plain", "OK");
+    saveSettings();
 }
 
 void handleReset()
 {
     Serial.println("WiFi reset requested");
     preferences.clear();
+    // Also clear saved LED settings
+    preferences.remove("settings");
     addStatusEntry("WiFi settings reset - restarting");
     server.send(200, "text/plain", "WiFi reset - device restarting");
     delay(1000);

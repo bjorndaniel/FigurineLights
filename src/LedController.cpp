@@ -127,7 +127,9 @@ String LedController::getAllStatus()
     for (int i = 0; i < NUM_GROUPS; i++)
     {
         if (i > 0)
+        {
             result += ",";
+        }
         result += "{\"group\":" + String(i);
         result += ",\"isOn\":" + String(groups[i].isOn ? "true" : "false");
         result += ",\"brightness\":" + String(groups[i].brightness);
