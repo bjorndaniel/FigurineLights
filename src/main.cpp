@@ -331,10 +331,15 @@ void handleRoot()
     html += "</style></head><body>";
     html += "<div class='container'>";
     html += "<h1>Figurine Lights Controller</h1>";
-    html += "<div>";
+    html += "<div style='display:flex;align-items:center;gap:12px;'>";
+    html += "<div style='flex:1;'>";
     html += "<button class='btn btn-success' onclick='allOn()'>All On</button>";
     html += "<button class='btn btn-danger' onclick='allOff()'>All Off</button>";
     html += "<button class='btn btn-warning' onclick='resetWifi()' style='margin-left: 20px; font-weight: bold;'>&#9888; Reset WiFi</button>";
+    html += "</div>";
+    html += "<div style='text-align:right;'>";
+    html += "<button class='btn btn-warning' onclick=\"location.href='/settings'\">Settings</button>";
+    html += "</div>";
     html += "</div>";
     // Global brightness row
     html += "<div style='margin-top:12px;display:flex;align-items:center;gap:12px;'>";
