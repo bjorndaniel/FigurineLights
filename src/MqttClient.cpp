@@ -1,8 +1,8 @@
 #include "MqttClient.h"
-#include <ArduinoJson.h>
+#include "StatusLog.h"
 
 // static members
-PubSubClient MqttClient::mqtt = PubSubClient((Client*)nullptr);
+MqttClient* MqttClient::s_instance = nullptr;
 LedController* MqttClient::s_ledController = nullptr;
 Preferences* MqttClient::s_prefs = nullptr;
 
@@ -10,37 +10,110 @@ MqttClient::MqttClient(LedController &ledController, Preferences &prefs)
 {
     s_ledController = &ledController;
     s_prefs = &prefs;
+    s_instance = this;
+    // mqtt is an object member
+    _host = String();
+    _port = 1883;
+    _useTls = false;
+    _lastPublish = 0;
+    _lastConnectAttempt = 0;
 }
 
-void MqttClient::begin(const char *host, uint16_t port)
+void MqttClient::begin(const char *host, uint16_t port, bool useTls)
 {
-    _host = host;
+    _host = String(host);
     _port = port;
-    mqtt.setClient(wifiClient);
-    mqtt.setServer(_host, _port);
+    _useTls = useTls;
+    // allocate PubSubClient and attach client
+    // attach client to the member PubSubClient
+    if (_useTls)
+    {
+        wifiClientSecure.setInsecure();
+        mqtt.setClient(wifiClientSecure);
+    }
+    else
+    {
+        mqtt.setClient(wifiClient);
+    }
+
+    mqtt.setServer(_host.c_str(), _port);
     mqtt.setCallback(MqttClient::mqttCallback);
 }
 
-static void publishGroupState(int group)
+void MqttClient::connect()
 {
-    if (!MqttClient::mqtt.connected()) return;
-    LedGroup g = MqttClient::s_ledController->getGroup(group);
-    StaticJsonDocument<256> doc;
-    doc["state"] = g.isOn ? "ON" : "OFF";
-    doc["brightness"] = g.brightness;
-    JsonArray arr = doc.createNestedArray("color");
-    arr.add(g.color.r);
-    arr.add(g.color.g);
-    arr.add(g.color.b);
+    if (mqtt.connected()) return;
+    Serial.printf("Connecting to MQTT %s:%d\n", _host.c_str(), _port);
+    String user = s_prefs->getString("mqtt_user", "");
+    String pass = s_prefs->getString("mqtt_pass", "");
+    bool ok = false;
+    if (user.length() > 0)
+    {
+    ok = mqtt.connect("figurine_client", user.c_str(), pass.c_str());
+    }
+    else
+    {
+    ok = mqtt.connect("figurine_client");
+    }
+
+    if (!ok)
+    {
+        Serial.println("MQTT connect failed");
+        return;
+    }
+
+    Serial.println("MQTT connected");
+    for (int i = 0; i < NUM_GROUPS; i++)
+    {
+        String t = String("figurine/group/") + String(i) + String("/set");
+        mqtt.subscribe(t.c_str());
+    }
+    mqtt.subscribe("figurine/all/set");
+
+    publishDiscovery();
+    publishState();
+}
+
+void MqttClient::loop()
+{
+    unsigned long now = millis();
+    if (!mqtt.connected())
+    {
+        // attempt to connect at most every 10 seconds
+        if (now - _lastConnectAttempt > 10000)
+        {
+            _lastConnectAttempt = now;
+            connect();
+        }
+        // return early so we don't block the webserver
+        return;
+    }
+
+    mqtt.loop();
+    now = millis();
+    if (now - _lastPublish > 30000)
+    {
+        publishState();
+        _lastPublish = now;
+    }
+}
+
+void MqttClient::publishGroupState(int group)
+{
+    if (!mqtt.connected()) return;
+    LedGroup g = s_ledController->getGroup(group);
+    // Build small JSON payload manually: {"state":"ON","brightness":NN,"color":[r,g,b]}
     char buf[256];
-    size_t n = serializeJson(doc, buf);
+    int len = snprintf(buf, sizeof(buf), "{\"state\":\"%s\",\"brightness\":%d,\"color\":[%d,%d,%d]}",
+                       g.isOn ? "ON" : "OFF",
+                       g.brightness,
+                       g.color.r, g.color.g, g.color.b);
     String topic = String("figurine/group/") + String(group) + String("/state");
-    MqttClient::mqtt.publish(topic.c_str(), buf, true);
+    mqtt.publish(topic.c_str(), buf, true);
 }
 
 void MqttClient::publishState()
 {
-    // Publish all group states periodically
     for (int i = 0; i < NUM_GROUPS; i++)
     {
         publishGroupState(i);
@@ -49,77 +122,42 @@ void MqttClient::publishState()
 
 void MqttClient::publishDiscovery()
 {
-    if (!MqttClient::mqtt.connected()) return;
-    // Publish HA discovery for each group
+    if (!mqtt.connected()) return;
     for (int i = 0; i < NUM_GROUPS; i++)
     {
-        StaticJsonDocument<512> doc;
         String deviceName = String("Figurine Group ") + String(i + 1);
         String unique = String("figurine_group_") + String(i + 1);
-        doc["name"] = deviceName;
-        doc["unique_id"] = unique;
-        doc["schema"] = "json";
-        doc["command_topic"] = String("figurine/group/") + String(i) + String("/set");
-        doc["state_topic"] = String("figurine/group/") + String(i) + String("/state");
-        doc["brightness"] = true;
-        doc["rgb"] = true;
-        char buf[512];
-        size_t n = serializeJson(doc, buf);
+        // Build HA discovery JSON manually
+        String payload = "{";
+        payload += "\"name\":\"" + deviceName + "\",";
+        payload += "\"unique_id\":\"" + unique + "\",";
+        payload += "\"schema\":\"json\",";
+        payload += "\"command_topic\":\"" + String("figurine/group/") + String(i) + String("/set") + "\",";
+        payload += "\"state_topic\":\"" + String("figurine/group/") + String(i) + String("/state") + "\",";
+        payload += "\"brightness\":true,";
+        payload += "\"rgb\":true";
+        payload += "}";
+
         String topic = String("homeassistant/light/") + unique + String("/config");
-        MqttClient::mqtt.publish(topic.c_str(), buf, true);
-    }
-}
-
-void MqttClient::connect()
-{
-    if (mqtt.connected()) return;
-    Serial.printf("Connecting to MQTT %s:%d\n", _host, _port);
-    if (mqtt.connect("figurine_client"))
-    {
-        Serial.println("MQTT connected");
-        // subscribe to commands
-        for (int i = 0; i < NUM_GROUPS; i++)
-        {
-            String t = String("figurine/group/") + String(i) + String("/set");
-            mqtt.subscribe(t.c_str());
-        }
-        mqtt.subscribe("figurine/all/set");
-        // publish discovery and initial state
-        publishDiscovery();
-        publishState();
-    }
-    else
-    {
-        Serial.println("MQTT connect failed");
-    }
-}
-
-void MqttClient::loop()
-{
-    if (!mqtt.connected())
-    {
-        connect();
-    }
-    else
-    {
-        mqtt.loop();
-        unsigned long now = millis();
-        if (now - _lastPublish > 30000)
-        {
-            publishState();
-            _lastPublish = now;
-        }
+        mqtt.publish(topic.c_str(), payload.c_str(), true);
     }
 }
 
 void MqttClient::mqttCallback(char* topic, byte* payload, unsigned int length)
+{
+    if (s_instance)
+    {
+        s_instance->handleMqttMessage(topic, payload, length);
+    }
+}
+
+void MqttClient::handleMqttMessage(char* topic, byte* payload, unsigned int length)
 {
     String t(topic);
     String body;
     for (unsigned int i = 0; i < length; i++) body += (char)payload[i];
     Serial.printf("MQTT msg on %s: %s\n", topic, body.c_str());
 
-    // group command
     if (t.startsWith("figurine/group/"))
     {
         int idxStart = String("figurine/group/").length();
@@ -127,54 +165,85 @@ void MqttClient::mqttCallback(char* topic, byte* payload, unsigned int length)
         if (slash == -1) return;
         String grpStr = t.substring(idxStart, slash);
         int g = grpStr.toInt();
-        // expect JSON {"state":"ON","brightness":128,"color":[r,g,b]}
-        StaticJsonDocument<256> doc;
-        DeserializationError err = deserializeJson(doc, body);
-        if (err) return;
-        const char *state = doc["state"] | "";
-        if (strcmp(state, "ON") == 0) s_ledController->setGroupState(g, true);
-        else if (strcmp(state, "OFF") == 0) s_ledController->setGroupState(g, false);
-        if (doc.containsKey("brightness"))
-        {
-            int b = doc["brightness"].as<int>();
-            s_ledController->setGroupBrightness(g, (uint8_t)b);
-        }
-        if (doc.containsKey("color"))
-        {
-            JsonArray arr = doc["color"].as<JsonArray>();
-            if (arr.size() >= 3)
-            {
-                int r = arr[0];
-                int gcol = arr[1];
-                int bcol = arr[2];
-                s_ledController->setGroupColor(g, r, gcol, bcol);
+
+        // Simple parser: look for "state":"ON" or brightness and color array
+        if (body.indexOf("\"state\":\"ON\"") != -1) {
+            LedGroup prev = s_ledController->getGroup(g);
+            if (!prev.isOn) {
+                s_ledController->setGroupState(g, true);
+                addStatusEntry(String("MQTT: Group ") + String(g+1) + String(" state: OFF -> ON"));
             }
         }
-        // save
-        s_prefs->putString("settings", ""); // cheap way to mark dirty; consumer can call saveSettings later
-        // publish updated state
+        else if (body.indexOf("\"state\":\"OFF\"") != -1) {
+            LedGroup prev = s_ledController->getGroup(g);
+            if (prev.isOn) {
+                s_ledController->setGroupState(g, false);
+                addStatusEntry(String("MQTT: Group ") + String(g+1) + String(" state: ON -> OFF"));
+            }
+        }
+
+        int bpos = body.indexOf("\"brightness\":");
+        if (bpos != -1) {
+            int start = bpos + 13;
+            int end = body.indexOf(',', start);
+            if (end == -1) end = body.indexOf('}', start);
+            int val = body.substring(start, end).toInt();
+            LedGroup prev = s_ledController->getGroup(g);
+            if (prev.brightness != (uint8_t)val) {
+                int prevPct = (prev.brightness * 100 + 127) / 255;
+                int newPct = ((uint8_t)val * 100 + 127) / 255;
+                s_ledController->setGroupBrightness(g, (uint8_t)val);
+                addStatusEntry(String("MQTT: Group ") + String(g+1) + String(" brightness: ") + String(prevPct) + "% -> " + String(newPct) + "%");
+            }
+        }
+
+        int cpos = body.indexOf("\"color\":[");
+        if (cpos != -1) {
+            int start = cpos + 9;
+            int end = body.indexOf(']', start);
+            if (end != -1) {
+                String arr = body.substring(start, end);
+                int comma1 = arr.indexOf(',');
+                int comma2 = arr.indexOf(',', comma1 + 1);
+                if (comma1 != -1 && comma2 != -1) {
+                    int r = arr.substring(0, comma1).toInt();
+                    int gcol = arr.substring(comma1 + 1, comma2).toInt();
+                    int bcol = arr.substring(comma2 + 1).toInt();
+                    LedGroup prevc = s_ledController->getGroup(g);
+                    if (prevc.color.r != r || prevc.color.g != gcol || prevc.color.b != bcol) {
+                        char oldc[32], newc[32];
+                        snprintf(oldc, sizeof(oldc), "rgb(%d,%d,%d)", prevc.color.r, prevc.color.g, prevc.color.b);
+                        snprintf(newc, sizeof(newc), "rgb(%d,%d,%d)", r, gcol, bcol);
+                        s_ledController->setGroupColor(g, r, gcol, bcol);
+                        addStatusEntry(String("MQTT: Group ") + String(g+1) + String(" color: ") + String(oldc) + " -> " + String(newc));
+                    }
+                }
+            }
+        }
+
+    // persist settings after applying MQTT command
+    s_prefs->putString("settings", s_ledController->getAllStatus());
         publishGroupState(g);
         return;
     }
 
     if (t == "figurine/all/set")
     {
-        StaticJsonDocument<128> doc;
-        DeserializationError err = deserializeJson(doc, body);
-        if (!err)
-        {
-            if (doc.containsKey("state"))
-            {
-                const char *state = doc["state"];
-                if (strcmp(state, "ON") == 0) s_ledController->setAllOn();
-                else s_ledController->setAllOff();
-            }
-            if (doc.containsKey("brightness"))
-            {
-                int b = doc["brightness"].as<int>();
-                for (int i = 0; i < NUM_GROUPS; i++) s_ledController->setGroupBrightness(i, (uint8_t)b);
-            }
-            publishState();
+        if (body.indexOf("\"state\":\"ON\"") != -1) s_ledController->setAllOn();
+        else if (body.indexOf("\"state\":\"OFF\"") != -1) s_ledController->setAllOff();
+
+        int bpos = body.indexOf("\"brightness\":");
+        if (bpos != -1) {
+            int start = bpos + 13;
+            int end = body.indexOf(',', start);
+            if (end == -1) end = body.indexOf('}', start);
+            int val = body.substring(start, end).toInt();
+            for (int i = 0; i < NUM_GROUPS; i++) s_ledController->setGroupBrightness(i, (uint8_t)val);
         }
+        // Persist new settings so MQTT-driven changes survive reboot
+        if (s_prefs) {
+            s_prefs->putString("settings", s_ledController->getAllStatus());
+        }
+        publishState();
     }
 }

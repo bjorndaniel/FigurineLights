@@ -2,7 +2,6 @@
 #define LED_CONTROLLER_H
 
 #include <FastLED.h>
-#include <ArduinoJson.h>
 
 #define LED_PIN 18
 #define NUM_LEDS 4
