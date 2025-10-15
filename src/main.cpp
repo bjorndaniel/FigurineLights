@@ -350,6 +350,17 @@ void setupWebServer()
     server.on("/api/reset", HTTP_POST, handleReset);
     server.on("/api/settings", HTTP_GET, handleGetSettings);
     server.on("/api/logs", HTTP_GET, handleLogs);
+    server.on("/api/prefs", HTTP_GET, [](){
+        String out = "{";
+        out += "\"mqtt_broker\":\"" + preferences.getString("mqtt_broker", "") + "\",";
+        out += "\"mqtt_port\":" + String(preferences.getInt("mqtt_port", 1883)) + ",";
+        out += "\"mqtt_tls\":" + String(preferences.getBool("mqtt_tls", false) ? "true" : "false") + ",";
+        out += "\"mqtt_user\":\"" + preferences.getString("mqtt_user", "") + "\",";
+        String settingsRaw = preferences.getString("settings", "");
+        out += "\"settings_raw\":\"" + settingsRaw + "\"";
+        out += "}";
+        server.send(200, "application/json", out);
+    });
     server.on("/api/clientlog", HTTP_POST, [](){
         String body = server.arg("plain");
         if (body.length() == 0) { server.send(400, "text/plain", "Empty"); return; }
