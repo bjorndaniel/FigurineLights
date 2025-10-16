@@ -43,6 +43,12 @@ String debugLog[LOG_BUFFER_SIZE];
 int debugLogIndex = 0;
 bool debugEnabled = false;
 
+// Debounced persistence: when UI triggers many changes, requestSaveSettings() will
+// schedule a real save after SAVE_DELAY_MS without writing to NVS repeatedly.
+#define SAVE_DELAY_MS 700
+bool pendingSave = false;
+unsigned long saveRequestedAt = 0;
+
 // Function declarations
 void setupWiFi();
 void startAccessPoint();
@@ -279,7 +285,19 @@ void loop()
 
     server.handleClient();
     if (mqttClient) mqttClient->loop();
+    // handle debounced save
+    if (pendingSave && (millis() - saveRequestedAt > SAVE_DELAY_MS)) {
+        pendingSave = false;
+        saveSettings();
+    }
     delay(10);
+}
+
+// Request a debounced save (call this instead of saveSettings directly from UI handlers)
+void requestSaveSettings()
+{
+    pendingSave = true;
+    saveRequestedAt = millis();
 }
 
 void setupWiFi()
@@ -348,6 +366,11 @@ void setupWebServer()
         out += "\"settings_raw\":\"" + settingsRaw + "\"";
         out += "}";
         server.send(200, "application/json", out);
+    });
+    server.on("/api/save_lighting", HTTP_POST, [](){
+        // immediate save on demand
+        saveSettings();
+        server.send(200, "text/plain", "OK");
     });
     server.on("/api/clientlog", HTTP_POST, [](){
         String body = server.arg("plain");
@@ -744,11 +767,11 @@ void handleSettings()
     html += "<label>MQTT Username (optional)</label><input id='user' name='user' value='" + user + "'>";
     html += "<label>MQTT Password (optional)</label><input id='pass' name='pass' type='password' value=''>";
     html += "<label class='checkbox'><input type='checkbox' id='debug' name='debug' " + String(dbg?"checked":"") + "> Enable debug logging (show logs in main UI)</label>";
-    html += "<button class='btn' type='button' onclick='saveSettings()'>Save</button>";
+    html += "<div style='display:flex;gap:8px;align-items:center'><button class='btn' type='button' onclick='saveSettings()'>Save</button><button class='btn' type='button' onclick='saveLighting()' style='background:#4CAF50;color:#fff'>Save Lighting State</button></div>";
     html += "</form>";
     html += "<p><a href='/'>Back to main UI</a></p>";
     html += "</div>";
-    html += "<script>function saveSettings(){const b=document.getElementById('broker').value;const u=document.getElementById('user').value;const p=document.getElementById('pass').value;const port=document.getElementById('port').value;const tls=document.getElementById('tls').checked;const debug=document.getElementById('debug').checked; if(!confirm('Save settings and restart device?')) return;fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({broker:b,port:parseInt(port),tls:tls,user:u,pass:p,debug:debug})}).then(r=>{if(r.ok){alert('Saved. Device will restart.');}else{alert('Save failed');}});}</script></body></html>";
+    html += "<script>function saveSettings(){const b=document.getElementById('broker').value;const u=document.getElementById('user').value;const p=document.getElementById('pass').value;const port=document.getElementById('port').value;const tls=document.getElementById('tls').checked;const debug=document.getElementById('debug').checked; if(!confirm('Save settings and restart device?')) return;fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({broker:b,port:parseInt(port),tls:tls,user:u,pass:p,debug:debug})}).then(r=>{if(r.ok){alert('Saved. Device will restart.');}else{alert('Save failed');}});} function saveLighting(){ if(!confirm('Persist current lighting state to device?')) return; fetch('/api/save_lighting',{method:'POST'}).then(r=>{if(r.ok){alert('Lighting state saved.');}else{alert('Save failed');}});} </script></body></html>";
     server.send(200, "text/html", html);
 }
 
