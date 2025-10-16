@@ -229,25 +229,13 @@ void setup()
     // Load persisted settings (if any)
     loadSettings();
 
-    Serial.println("Testing LEDs...");
+    Serial.println("Startup: applying persisted settings (if any)");
     Serial.printf("LED PIN: %d, NUM_LEDS: %d\n", LED_PIN, 4);
-
-    // Test each group individually
-    for (int i = 0; i < 4; i++)
-    {
-        Serial.printf("Setting group %d to white, brightness 100\n", i);
-        ledController.setGroupColor(i, 255, 255, 255);
-        ledController.setGroupBrightness(i, 100);
-        ledController.setGroupState(i, true);
-        delay(200);
-    }
-
-    Serial.println("All LEDs should now be white for 2 seconds...");
-    delay(2000);
-
-    // Turn off all LEDs after test
-    ledController.setAllOff();
-    Serial.println("Test complete, LEDs turned off");
+    // Quick status blink on the status LED (non-invasive) to indicate boot
+    pinMode(STATUS_LED_PIN, OUTPUT);
+    digitalWrite(STATUS_LED_PIN, HIGH);
+    delay(150);
+    digitalWrite(STATUS_LED_PIN, LOW);
 
     // preferences already initialized earlier
 
