@@ -642,7 +642,12 @@ void handleGroup()
         if (braceOpen != -1 && braceClose != -1) {
             String obj = body.substring(braceOpen + 1, braceClose);
             auto extractFromObj = [&](const String &k)->int {
-                int kk = obj.indexOf(String("\"") + k + String("\""));
+                String keyPattern;
+                keyPattern.reserve(k.length() + 2);
+                keyPattern = "\"";
+                keyPattern += k;
+                keyPattern += "\"";
+                int kk = obj.indexOf(keyPattern);
                 if (kk == -1) return -1;
                 int colon = obj.indexOf(':', kk);
                 if (colon == -1) return -1;
@@ -904,10 +909,22 @@ void handleLogs()
     // iterate from oldest to newest
     for (int i = 0; i < LOG_BUFFER_SIZE; i++) {
         int idx = (debugLogIndex + i) % LOG_BUFFER_SIZE;
-        if (debugLog[idx].length() == 0) continue;
+        String s = debugLog[idx];
+        if (s.length() == 0) continue;
+        // escape characters for JSON string
+        String esc;
+        esc.reserve(s.length() * 2);
+        for (size_t j = 0; j < (size_t)s.length(); j++) {
+            char c = s.charAt(j);
+            if (c == '\\') { esc += "\\\\"; }
+            else if (c == '"') { esc += "\\\""; }
+            else if (c == '\n') { esc += "\\n"; }
+            else if (c == '\r') { esc += "\\r"; }
+            else if (c == '\t') { esc += "\\t"; }
+            else { esc += c; }
+        }
         if (out.length() > 1) out += ",";
-        // escape quotes not necessary since we control contents
-        out += "\"" + debugLog[idx] + "\"";
+        out += "\"" + esc + "\"";
     }
     out += "]";
     server.send(200, "application/json", out);
